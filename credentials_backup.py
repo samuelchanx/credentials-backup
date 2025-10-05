@@ -5,6 +5,7 @@ Backs up credentials from git repositories and home directory
 """
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import logging
@@ -66,7 +67,7 @@ class CredentialsBackup:
             'id_ed25519',
             'id_ecdsa',
             'known_hosts',
-            'authorized_keys'
+            'authorized_keys',
         ]
         
         # File extensions to consider
@@ -128,17 +129,32 @@ class CredentialsBackup:
         """Find all potential secret files in a repository"""
         secret_files = []
         
+        # Common directories to skip
+        skip_dirs = {
+            '.git', 'node_modules', '__pycache__', '.pytest_cache', 
+            '.coverage', 'coverage', '.nyc_output', 'dist', 'build',
+            '.next', '.nuxt', 'target', '.cargo', '.gradle', '.m2',
+            'venv', 'env', '.venv', '.env.local', '.env.test',
+            '.env.example', '.env.sample', '.env.template',
+            '.svn', '.hg', '.bzr', '.DS_Store', 'Thumbs.db',
+            'vendor', 'bower_components', '.sass-cache', '.cache',
+            'tmp', 'temp', 'logs', 'log', '.logs'
+        }
+        
         # Walk through all files in the repository
         for root, dirs, files in os.walk(repo_path):
-            # Skip .git directory
-            if '.git' in dirs:
-                dirs.remove('.git')
+            # Skip unwanted directories
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
             
             root_path = Path(root)
             
             for file in files:
                 file_path = root_path / file
                 file_name = file.lower()
+                
+                # Skip files that are clearly not secrets
+                if self.should_skip_file(file_path, file_name):
+                    continue
                 
                 # Check if file matches secret patterns
                 if any(pattern.lower() in file_name for pattern in self.secret_patterns):
@@ -152,6 +168,202 @@ class CredentialsBackup:
                         secret_files.append(file_path)
         
         return secret_files
+    
+    def find_gitignored_files(self, repo_path: Path) -> List[Path]:
+        """Find git-ignored files that might contain secrets"""
+        secret_files = []
+        
+        try:
+            # Get git-ignored files using git command
+            result = subprocess.run(
+                ['git', 'ls-files', '--others', '--ignored', '--exclude-standard'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                self.logger.warning(f"Could not get git-ignored files for {repo_path}: {result.stderr}")
+                return []
+            
+            ignored_files = result.stdout.strip().split('\n')
+            
+            for file_path_str in ignored_files:
+                if not file_path_str.strip():
+                    continue
+                    
+                file_path = repo_path / file_path_str
+                
+                if not file_path.exists() or not file_path.is_file():
+                    continue
+                
+                # Skip files in common build/cache directories
+                if self.should_skip_gitignored_file(file_path_str):
+                    continue
+                
+                file_name = file_path.name.lower()
+                
+                # Check if file matches secret patterns
+                if any(pattern.lower() in file_name for pattern in self.secret_patterns):
+                    secret_files.append(file_path)
+                    continue
+                
+                # Check file extension
+                if any(file_name.endswith(ext) for ext in self.secret_extensions):
+                    # Additional check for files that might contain secrets
+                    if self.might_contain_secrets(file_path):
+                        secret_files.append(file_path)
+        
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"Timeout getting git-ignored files for {repo_path}")
+        except Exception as e:
+            self.logger.warning(f"Error getting git-ignored files for {repo_path}: {e}")
+        
+        return secret_files
+    
+    def should_skip_gitignored_file(self, file_path_str: str) -> bool:
+        """Check if a git-ignored file should be skipped"""
+        # Skip build dependency directories and their contents
+        build_dirs = {
+            'ios/pods', 'macos/pods', 'android/app/.cxx', 'android/app/build',
+            'android/build', 'android/.gradle', 'android/gradle',
+            'node_modules', '__pycache__', '.pytest_cache', '.coverage',
+            'coverage', '.nyc_output', 'dist', 'build', '.next', '.nuxt',
+            'target', '.cargo', '.gradle', '.m2', 'venv', 'env', '.venv',
+            '.env.local', '.env.test', '.env.example', '.env.sample',
+            '.env.template', '.svn', '.hg', '.bzr', '.DS_Store', 'Thumbs.db',
+            'vendor', 'bower_components', '.sass-cache', '.cache',
+            'tmp', 'temp', 'logs', 'log', '.logs'
+        }
+        
+        # Check if file is in a build directory
+        file_str = file_path_str.lower()
+        for build_dir in build_dirs:
+            # Check if the path contains the build directory
+            if f'/{build_dir}/' in file_str or file_str.endswith(f'/{build_dir}') or file_str.startswith(f'{build_dir}/'):
+                return True
+        
+        # Skip patterns based on file names
+        skip_patterns = {
+            'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+            'composer.lock', 'Pipfile.lock', 'poetry.lock',
+            'Gemfile.lock', 'go.sum', 'Cargo.lock',
+            '*.log', '*.tmp', '*.temp', '*.cache',
+            '*.pyc', '*.pyo', '*.pyd', '*.so', '*.dylib', '*.dll',
+            '*.exe', '*.bin', '*.o', '*.obj', '*.a', '*.lib',
+            '*.zip', '*.tar', '*.gz', '*.rar', '*.7z',
+            '*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.svg',
+            '*.mp3', '*.mp4', '*.avi', '*.mov', '*.wmv',
+            '*.pdf', '*.doc', '*.docx', '*.xls', '*.xlsx',
+            '*.ppt', '*.pptx', '*.odt', '*.ods', '*.odp',
+            '*.map', '*.min.js', '*.min.css', '*.bundle.js',
+            '*.chunk.js', '*.vendor.js', '*.app.js',
+            # Build artifacts
+            '*.podspec.json', '*.abi.json', '*.xcassets',
+            'prefab_config.json', 'Contents.json'
+        }
+        
+        # Skip extensions
+        skip_extensions = {
+            '.log', '.tmp', '.temp', '.cache', '.pyc', '.pyo', '.pyd',
+            '.so', '.dylib', '.dll', '.exe', '.bin', '.o', '.obj',
+            '.a', '.lib', '.zip', '.tar', '.gz', '.rar', '.7z',
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg',
+            '.mp3', '.mp4', '.avi', '.mov', '.wmv',
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx',
+            '.ppt', '.pptx', '.odt', '.ods', '.odp',
+            '.map', '.min.js', '.min.css', '.bundle.js',
+            '.chunk.js', '.vendor.js', '.app.js',
+            '.json', '.h', '.m', '.cc', '.cpp', '.c', '.swift'
+        }
+        
+        file_name = file_path_str.split('/')[-1].lower()
+        
+        # Check file name patterns
+        for pattern in skip_patterns:
+            if fnmatch.fnmatch(file_name, pattern.lower()):
+                return True
+        
+        # Check file extensions
+        if any(file_name.endswith(ext) for ext in skip_extensions):
+            return True
+        
+        return False
+    
+    def should_skip_file(self, file_path: Path, file_name: str) -> bool:
+        """Check if a file should be skipped based on common patterns"""
+        
+        # Skip build dependency directories and their contents
+        build_dirs = {
+            'ios/pods', 'macos/pods', 'android/app/.cxx', 'android/app/build',
+            'android/build', 'android/.gradle', 'android/gradle',
+            'node_modules', '__pycache__', '.pytest_cache', '.coverage',
+            'coverage', '.nyc_output', 'dist', 'build', '.next', '.nuxt',
+            'target', '.cargo', '.gradle', '.m2', 'venv', 'env', '.venv',
+            '.env.local', '.env.test', '.env.example', '.env.sample',
+            '.env.template', '.svn', '.hg', '.bzr', '.DS_Store', 'Thumbs.db',
+            'vendor', 'bower_components', '.sass-cache', '.cache',
+            'tmp', 'temp', 'logs', 'log', '.logs'
+        }
+        
+        # Check if file is in a build directory
+        file_str = str(file_path).lower()
+        for build_dir in build_dirs:
+            if f'/{build_dir}/' in file_str or file_str.endswith(f'/{build_dir}'):
+                return True
+        
+        # Skip patterns based on file names
+        skip_patterns = {
+            'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+            'composer.lock', 'Pipfile.lock', 'poetry.lock',
+            'Gemfile.lock', 'go.sum', 'Cargo.lock',
+            '*.log', '*.tmp', '*.temp', '*.cache',
+            '*.pyc', '*.pyo', '*.pyd', '*.so', '*.dylib', '*.dll',
+            '*.exe', '*.bin', '*.o', '*.obj', '*.a', '*.lib',
+            '*.zip', '*.tar', '*.gz', '*.rar', '*.7z',
+            '*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.svg',
+            '*.mp3', '*.mp4', '*.avi', '*.mov', '*.wmv',
+            '*.pdf', '*.doc', '*.docx', '*.xls', '*.xlsx',
+            '*.ppt', '*.pptx', '*.odt', '*.ods', '*.odp',
+            '*.map', '*.min.js', '*.min.css', '*.bundle.js',
+            '*.chunk.js', '*.vendor.js', '*.app.js',
+            # Build artifacts
+            '*.podspec.json', '*.abi.json', '*.xcassets',
+            'prefab_config.json', 'Contents.json'
+        }
+        
+        # Skip extensions
+        skip_extensions = {
+            '.log', '.tmp', '.temp', '.cache', '.pyc', '.pyo', '.pyd',
+            '.so', '.dylib', '.dll', '.exe', '.bin', '.o', '.obj',
+            '.a', '.lib', '.zip', '.tar', '.gz', '.rar', '.7z',
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg',
+            '.mp3', '.mp4', '.avi', '.mov', '.wmv',
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx',
+            '.ppt', '.pptx', '.odt', '.ods', '.odp',
+            '.map', '.min.js', '.min.css', '.bundle.js',
+            '.chunk.js', '.vendor.js', '.app.js',
+            '.json', '.h', '.m', '.cc', '.cpp', '.c', '.swift'
+        }
+        
+        # Check file name patterns
+        for pattern in skip_patterns:
+            if fnmatch.fnmatch(file_name.lower(), pattern.lower()):
+                return True
+        
+        # Check file extensions
+        if file_path.suffix.lower() in skip_extensions:
+            return True
+        
+        # Skip very large files (> 1MB)
+        try:
+            if file_path.stat().st_size > 1024 * 1024:  # 1MB
+                return True
+        except:
+            pass
+        
+        return False
     
     def might_contain_secrets(self, file_path: Path) -> bool:
         """Check if a file might contain secrets based on content"""
@@ -194,12 +406,13 @@ class CredentialsBackup:
         except:
             return True
     
-    def backup_repo_files(self, repo_path: Path, secret_files: List[Path]):
+    def backup_repo_files(self, repo_path: Path, secret_files: List[Path], repo_name: str = None):
         """Backup secret files from a repository"""
-        repo_name = repo_path.name
-        repo_backup_dir = self.backup_root / 'repos' / repo_name
+        if repo_name is None:
+            repo_name = repo_path.name
         
-        # Create backup directory for this repo
+        # Create backup directory maintaining folder structure
+        repo_backup_dir = self.backup_root / 'repos' / repo_name
         repo_backup_dir.mkdir(parents=True, exist_ok=True)
         
         backed_up_files = []
@@ -275,6 +488,31 @@ class CredentialsBackup:
             '.ssh/known_hosts',
             '.ssh/authorized_keys'
         ]
+        
+        # Browser cookies and data
+        browser_paths = [
+            # Chrome
+            'Library/Application Support/Google/Chrome/Default/Cookies',
+            'Library/Application Support/Google/Chrome/Default/Login Data',
+            'Library/Application Support/Google/Chrome/Default/Web Data',
+            'Library/Application Support/Google/Chrome/Default/Preferences',
+            # Firefox
+            'Library/Application Support/Firefox/Profiles',
+            # Safari
+            'Library/Cookies/Cookies.binarycookies',
+            'Library/Safari/LocalStorage',
+            # Edge
+            'Library/Application Support/Microsoft Edge/Default/Cookies',
+            'Library/Application Support/Microsoft Edge/Default/Login Data',
+            'Library/Application Support/Microsoft Edge/Default/Web Data',
+            # Brave
+            'Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies',
+            'Library/Application Support/BraveSoftware/Brave-Browser/Default/Login Data',
+            'Library/Application Support/BraveSoftware/Brave-Browser/Default/Web Data'
+        ]
+        
+        # Add browser paths to credential paths
+        home_credential_paths.extend(browser_paths)
         
         backed_up_files = []
         
@@ -374,33 +612,56 @@ class CredentialsBackup:
             self.logger.warning(f"Could not calculate hash for {file_path}: {e}")
             return ""
     
+    def find_all_git_repos(self, root_path: Path) -> List[Path]:
+        """Recursively find all git repositories"""
+        git_repos = []
+        
+        try:
+            for item in root_path.rglob('.git'):
+                if item.is_dir():
+                    # Get the parent directory (the actual repo root)
+                    repo_path = item.parent
+                    # Skip the backup directory itself to avoid infinite loops
+                    if 'backups' not in str(repo_path) and 'credentials-backup' not in str(repo_path):
+                        git_repos.append(repo_path)
+        except Exception as e:
+            self.logger.error(f"Error scanning for git repositories: {e}")
+        
+        return git_repos
+    
     def scan_repositories(self):
-        """Scan and backup all repositories"""
+        """Scan and backup all repositories recursively"""
         if not self.repos_folder or not self.repos_folder.exists():
             self.logger.warning("Repositories folder not specified or doesn't exist")
             return
         
-        repos_found = 0
+        # Find all git repositories recursively
+        self.logger.info(f"Scanning for git repositories in: {self.repos_folder}")
+        git_repos = self.find_all_git_repos(self.repos_folder)
+        
+        repos_found = len(git_repos)
         repos_backed_up = 0
         
-        # Find all git repositories
-        for item in self.repos_folder.iterdir():
-            if item.is_dir() and self.is_git_repo(item):
-                repos_found += 1
-                self.logger.info(f"Scanning repository: {item.name}")
+        self.logger.info(f"Found {repos_found} git repositories")
+        
+        # Process each repository
+        for repo_path in git_repos:
+            # Calculate relative path to maintain folder structure
+            try:
+                rel_path = repo_path.relative_to(self.repos_folder)
+                self.logger.info(f"Scanning repository: {rel_path} ({repo_path})")
                 
-                try:
-                    secret_files = self.find_secret_files(item)
-                    
-                    if secret_files:
-                        self.logger.info(f"Found {len(secret_files)} potential secret files in {item.name}")
-                        self.backup_repo_files(item, secret_files)
-                        repos_backed_up += 1
-                    else:
-                        self.logger.info(f"No secret files found in {item.name}")
+                secret_files = self.find_gitignored_files(repo_path)
                 
-                except Exception as e:
-                    self.logger.error(f"Failed to process repository {item.name}: {e}")
+                if secret_files:
+                    self.logger.info(f"Found {len(secret_files)} git-ignored secret files in {rel_path}")
+                    self.backup_repo_files(repo_path, secret_files, str(rel_path))
+                    repos_backed_up += 1
+                else:
+                    self.logger.info(f"No git-ignored secret files found in {rel_path}")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to process repository {repo_path}: {e}")
         
         self.logger.info(f"Repository scan complete: {repos_backed_up}/{repos_found} repositories backed up")
     
