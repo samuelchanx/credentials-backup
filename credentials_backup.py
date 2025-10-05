@@ -16,12 +16,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set
 
+from config import DEFAULT_BACKUP_DIR, DEFAULT_HOME_DIR, DEFAULT_REPOS_DIR
+
 
 class CredentialsBackup:
-    def __init__(self, backup_root: str, repos_folder: str = None):
-        self.backup_root = Path(backup_root)
-        self.repos_folder = Path(repos_folder) if repos_folder else None
-        self.home_dir = Path.home()
+    def __init__(self, backup_root: str = None, repos_folder: str = None):
+        self.backup_root = Path(backup_root) if backup_root else Path(DEFAULT_BACKUP_DIR)
+        self.repos_folder = Path(repos_folder) if repos_folder else Path(DEFAULT_REPOS_DIR) if DEFAULT_REPOS_DIR else None
+        self.home_dir = Path(DEFAULT_HOME_DIR)
         
         # Secret file patterns to look for
         self.secret_patterns = [
@@ -489,30 +491,30 @@ class CredentialsBackup:
             '.ssh/authorized_keys'
         ]
         
-        # Browser cookies and data
-        browser_paths = [
-            # Chrome
-            'Library/Application Support/Google/Chrome/Default/Cookies',
-            'Library/Application Support/Google/Chrome/Default/Login Data',
-            'Library/Application Support/Google/Chrome/Default/Web Data',
-            'Library/Application Support/Google/Chrome/Default/Preferences',
-            # Firefox
-            'Library/Application Support/Firefox/Profiles',
-            # Safari
-            'Library/Cookies/Cookies.binarycookies',
-            'Library/Safari/LocalStorage',
-            # Edge
-            'Library/Application Support/Microsoft Edge/Default/Cookies',
-            'Library/Application Support/Microsoft Edge/Default/Login Data',
-            'Library/Application Support/Microsoft Edge/Default/Web Data',
-            # Brave
-            'Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies',
-            'Library/Application Support/BraveSoftware/Brave-Browser/Default/Login Data',
-            'Library/Application Support/BraveSoftware/Brave-Browser/Default/Web Data'
-        ]
+        # Browser cookies and data - REMOVED (not needed)
+        # browser_paths = [
+        #     # Chrome
+        #     'Library/Application Support/Google/Chrome/Default/Cookies',
+        #     'Library/Application Support/Google/Chrome/Default/Login Data',
+        #     'Library/Application Support/Google/Chrome/Default/Web Data',
+        #     'Library/Application Support/Google/Chrome/Default/Preferences',
+        #     # Firefox
+        #     'Library/Application Support/Firefox/Profiles',
+        #     # Safari
+        #     'Library/Cookies/Cookies.binarycookies',
+        #     'Library/Safari/LocalStorage',
+        #     # Edge
+        #     'Library/Application Support/Microsoft Edge/Default/Cookies',
+        #     'Library/Application Support/Microsoft Edge/Default/Login Data',
+        #     'Library/Application Support/Microsoft Edge/Default/Web Data',
+        #     # Brave
+        #     'Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies',
+        #     'Library/Application Support/BraveSoftware/Brave-Browser/Default/Login Data',
+        #     'Library/Application Support/BraveSoftware/BraveSoftware/Brave-Browser/Default/Web Data'
+        # ]
         
-        # Add browser paths to credential paths
-        home_credential_paths.extend(browser_paths)
+        # Add browser paths to credential paths - REMOVED
+        # home_credential_paths.extend(browser_paths)
         
         backed_up_files = []
         
@@ -538,9 +540,9 @@ class CredentialsBackup:
                         self.logger.info(f"Backed up home credential: {cred_path}")
                     
                     elif source_path.is_dir():
-                        backup_path = home_backup_dir / cred_path
-                        shutil.copytree(source_path, backup_path, dirs_exist_ok=True)
-                        self.logger.info(f"Backed up home directory: {cred_path}")
+                        # Skip directories to avoid backing up large folders accidentally
+                        self.logger.warning(f"Skipping directory (not backing up): {cred_path}")
+                        continue
                 
                 except Exception as e:
                     self.logger.error(f"Failed to backup {source_path}: {e}")
@@ -711,8 +713,8 @@ class CredentialsBackup:
 
 def main():
     parser = argparse.ArgumentParser(description='Backup credentials from repositories and home directory')
-    parser.add_argument('--backup-dir', required=True, help='Directory to store backups')
-    parser.add_argument('--repos-dir', help='Directory containing git repositories to scan')
+    parser.add_argument('--backup-dir', default=DEFAULT_BACKUP_DIR, help=f'Directory to store backups (default: {DEFAULT_BACKUP_DIR})')
+    parser.add_argument('--repos-dir', default=DEFAULT_REPOS_DIR, help=f'Directory containing git repositories to scan (default: {DEFAULT_REPOS_DIR})')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()

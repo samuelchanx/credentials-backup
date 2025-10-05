@@ -193,6 +193,117 @@ Run with verbose logging to see detailed information:
 python3 credentials_backup.py --backup-dir ./backups --repos-dir ./repos --verbose
 ```
 
+## Configuration
+
+### Environment Variables
+
+The script supports configuration through environment variables and a `.env` file for sensitive settings.
+
+1. **Setup environment configuration**:
+   ```bash
+   ./setup_env.sh
+   ```
+   
+   This creates a `.env` file from the template with your custom settings.
+
+2. **Edit your configuration**:
+   ```bash
+   nano .env
+   ```
+   
+   Key settings:
+   - `BACKUP_DIR`: Where to store backups (default: `./backups`)
+   - `REPOS_DIR`: Directory containing your git repositories
+   - `RCLONE_REMOTE`: Your rclone remote name (e.g., `PCloud`)
+   - `BACKUP_PASSWORD`: Optional default password for 7zip encryption
+
+3. **Run with defaults**:
+   ```bash
+   python3 credentials_backup.py  # Uses .env defaults
+   ./secure_backup.sh            # Uses .env defaults
+   ```
+
+### Command Line Overrides
+
+You can still override settings via command line:
+
+```bash
+python3 credentials_backup.py --backup-dir /custom/backup --repos-dir /custom/repos
+./secure_backup.sh mypassword  # Override password
+```
+
+## Secure Cloud Backup
+
+For additional security, you can encrypt and upload your backups to cloud storage using 7zip and rclone.
+
+### Prerequisites
+
+Install required tools:
+
+```bash
+brew install p7zip rclone
+```
+
+### Setup pCloud (or other cloud storage)
+
+1. **Configure rclone for pCloud**:
+   ```bash
+   ./setup_pcloud.sh
+   ```
+   
+   Follow the prompts to:
+   - Create a new remote named "pcloud"
+   - Enter your pCloud credentials
+   - Test the connection
+
+2. **Alternative: Configure other cloud providers**:
+   ```bash
+   rclone config
+   ```
+   
+   Choose from supported providers like Google Drive, Dropbox, OneDrive, etc.
+
+### Secure Backup Process
+
+1. **Run the credentials backup**:
+   ```bash
+   python3 credentials_backup.py --backup-dir ./backups --repos-dir ~/Documents/workdev
+   ```
+
+2. **Create encrypted archive and upload**:
+   ```bash
+   ./secure_backup.sh                    # Prompt for password
+   ./secure_backup.sh mypassword123      # Use specific password
+   ```
+
+   This script will:
+   - Create a password-protected 7zip archive
+   - Encrypt both file contents and filenames
+   - Upload to your configured cloud storage
+   - Clean up local files
+
+### Security Features
+
+- **Password Protection**: Archive is protected with AES-256 encryption
+- **Header Encryption**: Filenames are also encrypted (`-mhe` flag)
+- **Maximum Compression**: Reduces upload time and storage costs
+- **Automatic Cleanup**: Local archive is removed after successful upload
+
+### Manual Process
+
+If you prefer manual control:
+
+```bash
+# Create encrypted archive
+7z a -p"your_password" -mhe -mx9 credentials_backup_$(date +%Y%m%d_%H%M%S).7z ./backups/*
+
+# Upload to cloud
+rclone copy credentials_backup_*.7z pcloud:credentials-backup/ --progress
+
+# Clean up
+rm credentials_backup_*.7z
+```
+
 ## Contributing
 
 Feel free to submit issues and enhancement requests!

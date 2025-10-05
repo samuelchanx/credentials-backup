@@ -2,11 +2,33 @@
 Configuration file for credentials backup
 """
 
-# Default backup directory
-DEFAULT_BACKUP_DIR = "/Users/sc/Documents/workdev/credentials-backup/backups"
+import os
+from pathlib import Path
 
-# Default repositories directory (customize this path)
-DEFAULT_REPOS_DIR = "/Users/sc/Documents/workdev/credentials-backup/repos"
+
+# Load environment variables from .env file if it exists
+def load_env_file():
+    """Load environment variables from .env file"""
+    env_file = Path(__file__).parent / '.env'
+    if env_file.exists():
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key.strip()] = value.strip()
+
+# Load environment variables
+load_env_file()
+
+# Default backup directory (can be overridden by environment variable)
+DEFAULT_BACKUP_DIR = os.getenv('BACKUP_DIR', './backups')
+
+# Default repositories directory (can be overridden by environment variable)
+DEFAULT_REPOS_DIR = os.getenv('REPOS_DIR', './repos')
+
+# Default home directory (can be overridden by environment variable)
+DEFAULT_HOME_DIR = os.getenv('HOME_DIR', str(Path.home()))
 
 # Additional secret file patterns to look for
 ADDITIONAL_SECRET_PATTERNS = [
