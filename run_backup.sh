@@ -3,8 +3,15 @@
 # Credentials Backup Runner Script
 # This script provides easy commands to run the backup
 
-BACKUP_DIR="/Users/sc/Documents/workdev/credentials-backup/backups"
-REPOS_DIR="/Users/sc/Documents/workdev/credentials-backup/repos"  # Customize this path
+# Load BACKUP_DIR and REPOS_DIR from .env file
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | grep -E '^(BACKUP_DIR|REPOS_DIR)=' | xargs)
+else
+    echo "Warning: .env file not found, using defaults."
+fi
+
+: "${BACKUP_DIR:='./backups'}"
+: "${REPOS_DIR:='~/Documents/workdev'}"
 
 # Colors for output
 RED='\033[0;31m'

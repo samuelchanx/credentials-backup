@@ -156,8 +156,8 @@ cleanup() {
     print_status "Cleaning up..."
     
     if [ -f "$ARCHIVE_NAME" ]; then
-        rm "$ARCHIVE_NAME"
-        print_success "Local archive removed"
+        # Keeping local archive for reference; not removing $ARCHIVE_NAME
+        print_status "Local archive kept for reference"
     fi
     
     if [ -d "$TEMP_DIR" ]; then
